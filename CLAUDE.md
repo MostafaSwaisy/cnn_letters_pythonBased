@@ -49,9 +49,9 @@ sigmoid
 maxpool 2x2                                        -> N x 8 x 8
   |
 flatten                                            -> N*64 vector
-  |                                    HOG (5x5 cells x 8 bins) -> 200 vector
-  |                                                  |
-  +---------------------- concat ---------------------+
+  |            input image -> HOG (5x5 cells x 8 bins) -> 200 vector
+  |                                                    |
+  +----------------------- concat -----------------------+
   |
 dense   -> HIDDEN units, sigmoid
   |
