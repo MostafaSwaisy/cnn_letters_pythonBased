@@ -312,6 +312,46 @@ def dense_forward(inputs, weights, biases):
     return outputs
 
 
+def hog_features(image, cell=HOG_CELL, bins=HOG_BINS):
+    """Histogram-of-oriented-gradients descriptor for one IMG_SIZE x IMG_SIZE image.
+
+    Unsigned gradient orientation (0-180 degrees), binned per cell and
+    weighted by gradient magnitude; each cell's histogram is L2-normalised
+    independently so stroke thickness/contrast doesn't dominate the scale.
+    Border pixels (no full neighbourhood for the central-difference
+    gradient) are skipped -- their contribution to a 20x20 image is
+    negligible. This is a fixed function of the pixels, not a learned
+    layer, so it has no weights and needs no backward pass.
+    """
+    size = len(image)
+    cells_per_side = size // cell
+    histograms = [[0.0] * bins for _ in range(cells_per_side * cells_per_side)]
+    bin_width = 180.0 / bins
+
+    for y in range(1, size - 1):
+        cell_y = y // cell
+        if cell_y >= cells_per_side:
+            continue
+        for x in range(1, size - 1):
+            cell_x = x // cell
+            if cell_x >= cells_per_side:
+                continue
+            gx = image[y][x + 1] - image[y][x - 1]
+            gy = image[y + 1][x] - image[y - 1][x]
+            magnitude = math.sqrt(gx * gx + gy * gy)
+            if magnitude == 0.0:
+                continue
+            angle = math.degrees(math.atan2(gy, gx)) % 180.0
+            b = int(angle / bin_width) % bins
+            histograms[cell_y * cells_per_side + cell_x][b] += magnitude
+
+    features = []
+    for hist in histograms:
+        norm = math.sqrt(sum(v * v for v in hist)) + 1e-6
+        features.extend(v / norm for v in hist)
+    return features
+
+
 def forward(model, image):
     """Full forward pass. Returns the prediction plus every cached value."""
     conv_maps = conv_forward(image, model["filters"], model["conv_bias"])
