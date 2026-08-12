@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 dataset/
 model.json
+kaggle.json
