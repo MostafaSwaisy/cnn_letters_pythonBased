@@ -71,7 +71,14 @@ MODEL_FILE = "model.json"
 
 CONV_OUT = IMG_SIZE - FILTER_SIZE + 1      # 16
 POOL_OUT = CONV_OUT // POOL_SIZE           # 8
-FLAT_SIZE = N_FILTERS * POOL_OUT * POOL_OUT
+CONV_FLAT_SIZE = N_FILTERS * POOL_OUT * POOL_OUT   # 384
+
+HOG_CELL = 4                                        # pixels per HOG cell side
+HOG_BINS = 8                                         # unsigned orientation bins (0-180deg)
+HOG_CELLS_PER_SIDE = IMG_SIZE // HOG_CELL            # 5
+HOG_FEATURE_SIZE = HOG_CELLS_PER_SIDE * HOG_CELLS_PER_SIDE * HOG_BINS  # 200
+
+FLAT_SIZE = CONV_FLAT_SIZE + HOG_FEATURE_SIZE        # 584, hidden layer's input width
 
 
 # ---------------------------------------------------------------------------
