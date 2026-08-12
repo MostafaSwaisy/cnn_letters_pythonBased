@@ -1,11 +1,18 @@
 """
-CNN for handwritten/printed letter classification -- pure Python.
-Only external dependency: Pillow (used ONLY to read pixel values).
+CNN for handwritten/printed character classification -- pure Python.
+External dependencies: Pillow (read pixel values), kagglehub (fetch the
+training dataset).
 
 No numpy, no tensorflow, no pytorch. All maths written by hand.
 All matrices are plain lists of lists: [[float, ...], ...]
 All code is organised in functions (no classes).
 All activations are sigmoid.
+
+Training data: the Kaggle "English Handwritten Characters Dataset"
+(dhruvildave/english-handwritten-characters-dataset), downloaded
+automatically on first use via kagglehub and cached under ./dataset.
+This requires a Kaggle account with an API token configured
+(~/.kaggle/kaggle.json) -- see https://www.kaggle.com/docs/api.
 
 Architecture:
     input   20 x 20 grayscale, values in [0,1]  (1.0 = ink)
@@ -19,23 +26,27 @@ Architecture:
       |
     dense   -> HIDDEN units, sigmoid
       |
-    dense   -> 26 units, sigmoid  (one-hot A..Z)
+    dense   -> 62 units, sigmoid  (one-hot 0-9, A-Z, a-z)
       |
     loss    binary cross-entropy (keeps the gradient alive through sigmoid)
 
 Usage:
-    python3 cnn_letters.py makedata      # build a synthetic dataset with PIL fonts
+    python3 cnn_letters.py download      # fetch/cache the Kaggle dataset
     python3 cnn_letters.py train         # train and save model.json
     python3 cnn_letters.py test          # accuracy on the held-out split
     python3 cnn_letters.py read word.png # segment a word image and print the text
 """
 
+import csv
 import json
 import math
 import os
 import random
+import shutil
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+
+import kagglehub
 
 
 # ---------------------------------------------------------------------------
@@ -46,14 +57,16 @@ IMG_SIZE = 20          # every letter is normalised to IMG_SIZE x IMG_SIZE
 FILTER_SIZE = 5        # convolution kernel is FILTER_SIZE x FILTER_SIZE
 N_FILTERS = 6          # number of feature maps
 POOL_SIZE = 2          # max pooling window
-HIDDEN = 40            # neurons in the hidden dense layer
-ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-N_CLASSES = len(ALPHABET)
+HIDDEN = 80            # neurons in the hidden dense layer (bumped from 40 for 62-class output)
+CLASSES = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+N_CLASSES = len(CLASSES)
 
 LEARNING_RATE = 0.5
 EPOCHS = 35
 
 DATA_DIR = "dataset"
+DATASET_SLUG = "dhruvildave/english-handwritten-characters-dataset"
+DATASET_CSV = "english.csv"
 MODEL_FILE = "model.json"
 
 CONV_OUT = IMG_SIZE - FILTER_SIZE + 1      # 16
@@ -133,17 +146,34 @@ def one_hot(index, length=N_CLASSES):
     return vector
 
 
+def ensure_dataset(folder=DATA_DIR):
+    """Make sure folder/english.csv exists, downloading it via kagglehub if not.
+
+    Kept CSV-based (image path + label per row) rather than reorganised into
+    one-subfolder-per-class: this dataset has both 'A' and 'a' classes, and
+    case-insensitive filesystems (Windows, default macOS) would silently
+    merge an 'A/' folder with an 'a/' folder.
+    """
+    csv_path = os.path.join(folder, DATASET_CSV)
+    if os.path.isfile(csv_path):
+        return
+    cache_path = kagglehub.dataset_download(DATASET_SLUG)
+    os.makedirs(folder, exist_ok=True)
+    shutil.copytree(cache_path, folder, dirs_exist_ok=True)
+    if not os.path.isfile(csv_path):
+        raise RuntimeError("kagglehub download did not produce %s" % csv_path)
+
+
 def load_dataset(folder=DATA_DIR):
-    """Expects folder/A/*.png, folder/B/*.png, ... one sub-folder per letter."""
+    """Load every (image, label) pair listed in folder/english.csv."""
+    ensure_dataset(folder)
     samples = []
-    for label_index, letter in enumerate(ALPHABET):
-        letter_dir = os.path.join(folder, letter)
-        if not os.path.isdir(letter_dir):
-            continue
-        for name in sorted(os.listdir(letter_dir)):
-            if not name.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
-                continue
-            image = load_image(os.path.join(letter_dir, name))
+    csv_path = os.path.join(folder, DATASET_CSV)
+    with open(csv_path, newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            label_index = CLASSES.index(row["label"])
+            image_path = os.path.join(folder, row["image"])
+            image = load_image(image_path)
             samples.append((image, label_index))
     return samples
 
@@ -438,7 +468,7 @@ def evaluate(model, samples):
 def predict_letter(model, image):
     output, _ = forward(model, image)
     index = argmax(output)
-    return ALPHABET[index], output[index]
+    return CLASSES[index], output[index]
 
 
 # ---------------------------------------------------------------------------
@@ -541,57 +571,6 @@ def read_text(model, path, space_ratio=0.55):
     return text
 
 
-# ---------------------------------------------------------------------------
-# 7. synthetic dataset generator, so the script runs without downloading data
-# ---------------------------------------------------------------------------
-
-def find_fonts(limit=6):
-    paths = []
-    for root in ("/usr/share/fonts", "/Library/Fonts", "C:/Windows/Fonts"):
-        if not os.path.isdir(root):
-            continue
-        for folder, _dirs, files in os.walk(root):
-            for name in files:
-                if name.lower().endswith(".ttf"):
-                    paths.append(os.path.join(folder, name))
-    random.shuffle(paths)
-    return paths[:limit]
-
-
-def make_dataset(folder=DATA_DIR, per_letter=24):
-    """Render each letter with several fonts / sizes / small shifts."""
-    fonts = find_fonts()
-    if not fonts:
-        raise RuntimeError("No .ttf fonts found -- point find_fonts() at a font folder.")
-    os.makedirs(folder, exist_ok=True)
-    for letter in ALPHABET:
-        letter_dir = os.path.join(folder, letter)
-        os.makedirs(letter_dir, exist_ok=True)
-        count = 0
-        while count < per_letter:
-            font_path = random.choice(fonts)
-            size = random.randint(22, 30)
-            try:
-                font = ImageFont.truetype(font_path, size)
-            except Exception:
-                continue
-            canvas = Image.new("L", (48, 48), 255)
-            draw = ImageDraw.Draw(canvas)
-            draw.text((24, 24), letter, font=font, fill=0, anchor="mm")
-
-            # same trim-and-square treatment the reader applies
-            from PIL import ImageChops
-            box = ImageChops.invert(canvas).getbbox()
-            if box is None:
-                continue
-            squared = square_glyph(canvas, box)
-            if squared is None:
-                continue
-            squared.save(os.path.join(letter_dir, "%03d.png" % count))
-            count += 1
-    print("dataset written to", folder)
-
-
 def split_dataset(samples, test_ratio=0.2, seed=7):
     random.seed(seed)
     shuffled = samples[:]
@@ -601,20 +580,21 @@ def split_dataset(samples, test_ratio=0.2, seed=7):
 
 
 # ---------------------------------------------------------------------------
-# 8. command line entry point
+# 7. command line entry point
 # ---------------------------------------------------------------------------
 
 def main():
     import sys
     command = sys.argv[1] if len(sys.argv) > 1 else "help"
 
-    if command == "makedata":
-        make_dataset()
+    if command == "download":
+        ensure_dataset()
+        print("dataset ready in", DATA_DIR)
 
     elif command == "train":
         samples = load_dataset()
         if not samples:
-            print("No data. Run: python3 cnn_letters.py makedata")
+            print("No data. Run: python3 cnn_letters.py download")
             return
         train_set, test_set = split_dataset(samples)
         print("train %d samples, test %d samples" % (len(train_set), len(test_set)))
