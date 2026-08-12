@@ -356,14 +356,16 @@ def forward(model, image):
     """Full forward pass. Returns the prediction plus every cached value."""
     conv_maps = conv_forward(image, model["filters"], model["conv_bias"])
     pooled_maps, winners = maxpool_forward(conv_maps)
-    flat = flatten(pooled_maps)
-    hidden = dense_forward(flat, model["w1"], model["b1"])
+    conv_flat = flatten(pooled_maps)
+    hog = hog_features(image)
+    combined = conv_flat + hog
+    hidden = dense_forward(combined, model["w1"], model["b1"])
     output = dense_forward(hidden, model["w2"], model["b2"])
     cache = {
         "image": image,
         "conv_maps": conv_maps,
         "winners": winners,
-        "flat": flat,
+        "combined": combined,
         "hidden": hidden,
         "output": output,
     }
