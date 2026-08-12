@@ -3,3 +3,4 @@ __pycache__/
 dataset/
 model.json
 kaggle.json
+experiments/

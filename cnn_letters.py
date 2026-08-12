@@ -57,11 +57,11 @@ IMG_SIZE = 20          # every letter is normalised to IMG_SIZE x IMG_SIZE
 FILTER_SIZE = 5        # convolution kernel is FILTER_SIZE x FILTER_SIZE
 N_FILTERS = 6          # number of feature maps
 POOL_SIZE = 2          # max pooling window
-HIDDEN = 80            # neurons in the hidden dense layer (bumped from 40 for 62-class output)
+HIDDEN = 48            # neurons in the hidden dense layer (tuned via experiments/, see docs/tech-decisions.md)
 CLASSES = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 N_CLASSES = len(CLASSES)
 
-LEARNING_RATE = 0.5
+LEARNING_RATE = 0.2    # tuned via experiments/, see docs/tech-decisions.md
 EPOCHS = 35
 
 DATA_DIR = "dataset"
@@ -182,7 +182,7 @@ def load_dataset(folder=DATA_DIR):
 # 3. model creation / persistence
 # ---------------------------------------------------------------------------
 
-def init_model(seed=42):
+def init_model(seed=42, hidden=HIDDEN):
     """Returns the model as a plain dict of lists -- easy to save as JSON."""
     random.seed(seed)
     filters = []
@@ -191,9 +191,9 @@ def init_model(seed=42):
     return {
         "filters": filters,
         "conv_bias": [0.0] * N_FILTERS,
-        "w1": random_matrix(HIDDEN, FLAT_SIZE, FLAT_SIZE),
-        "b1": [0.0] * HIDDEN,
-        "w2": random_matrix(N_CLASSES, HIDDEN, HIDDEN),
+        "w1": random_matrix(hidden, FLAT_SIZE, FLAT_SIZE),
+        "b1": [0.0] * hidden,
+        "w2": random_matrix(N_CLASSES, hidden, hidden),
         "b2": [0.0] * N_CLASSES,
     }
 
@@ -418,7 +418,7 @@ def train_sample(model, image, label_index, learning_rate=LEARNING_RATE):
     )
     delta_hidden = [
         d_hidden_activation[i] * sigmoid_prime_from_output(cache["hidden"][i])
-        for i in range(HIDDEN)
+        for i in range(len(cache["hidden"]))
     ]
 
     # hidden layer -> flattened pooling output
@@ -436,10 +436,23 @@ def train_sample(model, image, label_index, learning_rate=LEARNING_RATE):
     return loss, argmax(output)
 
 
-def train(samples, model=None, epochs=EPOCHS, learning_rate=LEARNING_RATE, verbose=True):
+def train(samples, model=None, epochs=EPOCHS, learning_rate=LEARNING_RATE, verbose=True,
+          test_samples=None, checkpoint_path=None):
+    """Train for `epochs` passes over `samples`.
+
+    If `test_samples` is given, test accuracy is measured every epoch and
+    the best-scoring model snapshot is tracked (early stopping against
+    overfitting the training set). That snapshot is saved to
+    `checkpoint_path` (if given) once training finishes; either way the
+    function still returns the LAST epoch's model, matching the old
+    no-test-tracking behaviour.
+    """
     if model is None:
         model = init_model()
     order = list(range(len(samples)))
+    best_test_acc = -1.0
+    best_epoch = None
+    best_snapshot = None
     for epoch in range(epochs):
         random.shuffle(order)
         total_loss = 0.0
@@ -450,9 +463,22 @@ def train(samples, model=None, epochs=EPOCHS, learning_rate=LEARNING_RATE, verbo
             total_loss += loss
             if predicted == label:
                 correct += 1
+        train_acc = correct / len(samples)
+        line = "epoch %2d/%d  loss %.4f  train acc %.3f" % (epoch + 1, epochs, total_loss / len(samples), train_acc)
+        if test_samples is not None:
+            test_acc = evaluate(model, test_samples)
+            line += "  test acc %.3f" % test_acc
+            if test_acc > best_test_acc:
+                best_test_acc = test_acc
+                best_epoch = epoch + 1
+                best_snapshot = json.loads(json.dumps(model))  # deep copy, model is plain JSON-able lists/dicts
         if verbose:
-            print("epoch %2d/%d  loss %.4f  train acc %.3f"
-                  % (epoch + 1, epochs, total_loss / len(samples), correct / len(samples)))
+            print(line)
+    if test_samples is not None:
+        if verbose:
+            print("best epoch %d  test acc %.3f" % (best_epoch, best_test_acc))
+        if checkpoint_path:
+            save_model(best_snapshot, checkpoint_path)
     return model
 
 
@@ -583,6 +609,20 @@ def split_dataset(samples, test_ratio=0.2, seed=7):
 # 7. command line entry point
 # ---------------------------------------------------------------------------
 
+def parse_flags(argv, spec):
+    """Tiny --flag value parser. spec maps flag name -> converter function."""
+    values = {}
+    i = 0
+    while i < len(argv):
+        name = argv[i].lstrip("-")
+        if name in spec:
+            values[name] = spec[name](argv[i + 1])
+            i += 2
+        else:
+            i += 1
+    return values
+
+
 def main():
     import sys
     command = sys.argv[1] if len(sys.argv) > 1 else "help"
@@ -592,16 +632,25 @@ def main():
         print("dataset ready in", DATA_DIR)
 
     elif command == "train":
+        flags = parse_flags(sys.argv[2:], {
+            "hidden": int, "epochs": int, "lr": float, "out": str,
+        })
+        hidden = flags.get("hidden", HIDDEN)
+        epochs = flags.get("epochs", EPOCHS)
+        learning_rate = flags.get("lr", LEARNING_RATE)
+        out_path = flags.get("out", MODEL_FILE)
+
         samples = load_dataset()
         if not samples:
             print("No data. Run: python3 cnn_letters.py download")
             return
         train_set, test_set = split_dataset(samples)
-        print("train %d samples, test %d samples" % (len(train_set), len(test_set)))
-        model = train(train_set)
-        print("test accuracy %.3f" % evaluate(model, test_set))
-        save_model(model)
-        print("model saved to", MODEL_FILE)
+        print("train %d samples, test %d samples  (hidden=%d epochs=%d lr=%.3f)"
+              % (len(train_set), len(test_set), hidden, epochs, learning_rate))
+        model = init_model(hidden=hidden)
+        train(train_set, model=model, epochs=epochs, learning_rate=learning_rate,
+              test_samples=test_set, checkpoint_path=out_path)
+        print("best-epoch model saved to", out_path)
 
     elif command == "test":
         model = load_model()

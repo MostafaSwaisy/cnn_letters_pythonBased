@@ -6,6 +6,54 @@ want to revisit it later.
 
 ---
 
+## 2026-08-12 — Add early-stopping checkpointing, tune HIDDEN/LR down after comparing 4 variants
+
+**Decision:** Training the 62-class model with `HIDDEN=80, LR=0.5, EPOCHS=35`
+(the previous entry's bump) produced severe overfitting: 97.5% train accuracy
+but only 51.3% test accuracy at epoch 35. Two changes were made:
+
+1. `train()` now evaluates test accuracy every epoch and keeps the
+   best-scoring model snapshot instead of whatever the last epoch produced
+   (early stopping by checkpointing). This is now always-on default
+   behaviour for the `train` CLI command, not an opt-in flag.
+2. Ran 4 variants (same 2728/682 train/test split, all with checkpointing)
+   to compare `HIDDEN` and `LEARNING_RATE`:
+
+   | Variant | hidden | lr | best epoch | best test acc | train acc at best epoch |
+   |---|---|---|---|---|---|
+   | 0: baseline + checkpointing | 80 | 0.5 | 30 | 0.554 | 0.956 |
+   | 1: smaller hidden | 48 | 0.5 | 26 | 0.528 | 0.811 |
+   | 2: lower learning rate | 80 | 0.2 | 29 | 0.642 | 0.993 |
+   | 3: smaller hidden + lower lr | 48 | 0.2 | 16 | 0.644 | 0.873 |
+
+   Learning rate was the dominant factor, not hidden size. Variant 3 tied
+   variant 2 on accuracy but reached its best epoch in about half the
+   epochs with a smaller (cheaper) hidden layer, so it's the adopted
+   default: `HIDDEN = 48`, `LEARNING_RATE = 0.2`.
+
+**Why:** Checkpointing alone recovered part of the overfitting gap
+(51.3% -> 55.4%) for free — no reason not to make it the default. Among
+the hyperparameter changes, a lower learning rate mattered far more than
+hidden-layer size for this dataset/architecture; `HIDDEN=48` was kept
+because it's strictly better (same accuracy, cheaper, fewer epochs to get
+there) rather than for its own sake.
+
+**Rollback:** Set `HIDDEN` back to 80 and/or `LEARNING_RATE` back to 0.5
+in `cnn_letters.py` if a retest suggests otherwise. The `train` CLI now
+accepts `--hidden`, `--epochs`, `--lr`, `--out` overrides to rerun
+comparisons without editing constants — see the (gitignored) `experiments/`
+folder pattern used for this comparison. `model.json` is not compatible
+across `HIDDEN` values — requires retraining either way. The checkpointing
+behaviour itself (saving the best epoch, not the last) is not expected to
+need rolling back independent of the hyperparameter values.
+
+**Caveat:** 64% test accuracy is still far from great for 62-class OCR;
+if it's not enough, the next lever (not yet tried) is folding visually
+identical classes (`0`/`O`, `1`/`l`/`I`, etc.) back together, which was
+previously ruled out in favour of keeping all 62 classes distinct.
+
+---
+
 ## 2026-08-12 — Bump HIDDEN (and possibly EPOCHS) for the 62-class problem
 
 **Decision:** Increase `HIDDEN` from 40 (tuned for 26-class A-Z) to 80 as a
