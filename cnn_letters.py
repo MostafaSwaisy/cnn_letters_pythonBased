@@ -470,13 +470,16 @@ def train_sample(model, image, label_index, learning_rate=LEARNING_RATE):
         for i in range(len(cache["hidden"]))
     ]
 
-    # hidden layer -> flattened pooling output
-    d_flat = dense_backward(
-        cache["flat"], delta_hidden, model["w1"], model["b1"], learning_rate
+    # hidden layer -> combined (conv-flatten ++ HOG) input
+    d_combined = dense_backward(
+        cache["combined"], delta_hidden, model["w1"], model["b1"], learning_rate
     )
+    # HOG is a fixed function of the pixels (no upstream weights), so only
+    # the conv-flatten portion of the gradient continues backward.
+    d_conv_flat = d_combined[:CONV_FLAT_SIZE]
 
     # flatten -> pooling -> convolution
-    d_pooled = unflatten(d_flat, N_FILTERS, POOL_OUT)
+    d_pooled = unflatten(d_conv_flat, N_FILTERS, POOL_OUT)
     d_conv_activation = maxpool_backward(d_pooled, cache["winners"], N_FILTERS, CONV_OUT)
     conv_backward(
         image, cache["conv_maps"], d_conv_activation,
