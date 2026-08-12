@@ -34,7 +34,7 @@ Usage:
     python3 cnn_letters.py download      # fetch/cache the Kaggle dataset
     python3 cnn_letters.py train         # train and save model.json
     python3 cnn_letters.py test          # accuracy on the held-out split
-    python3 cnn_letters.py read word.png # segment a word image and print the text
+    python3 cnn_letters.py read examples/word.jpeg # segment a word image and print the text
 """
 
 import csv
