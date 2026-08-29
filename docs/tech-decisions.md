@@ -6,6 +6,57 @@ want to revisit it later.
 
 ---
 
+## 2026-08-12 — Add HOG feature augmentation (branch `feature/hog-features`)
+
+**Decision:** Added a hand-implemented HOG (Histogram of Oriented Gradients)
+descriptor, computed directly from the raw 20x20 input image
+(`HOG_CELL=4, HOG_BINS=8` -> 5x5 cells x 8 bins = 200 values, unsigned
+orientation, magnitude-weighted, L2-normalised per cell), concatenated
+with the existing conv+pool flattened output (384 values) before the
+hidden dense layer (`combined` = 584 values feeding `w1`). HOG is a fixed
+function of the pixels, not a learned layer, so its portion of the
+backward-pass gradient is computed then discarded (no upstream weights to
+update).
+
+Compared against the current best (hidden=48, lr=0.2, no HOG: 64.4% test
+acc, see the entry below) with identical hyperparameters and the same
+train/test split:
+
+| Variant | test acc | best epoch |
+|---|---|---|
+| No HOG (existing baseline) | 0.644 | 16 |
+| + HOG augmentation | **0.667** | 31 |
+
++2.3pp improvement. Since the pipeline is fully seeded/deterministic
+(fixed `random.seed` in `init_model`, fixed split seed in
+`split_dataset`), this reflects the actual effect of the added features
+for this exact configuration, not run-to-run sampling noise — though it's
+a modest gain, not a dramatic one. Adopted: `model.json` now holds this
+HOG-augmented, best-epoch-31 model.
+
+**Why:** HOG gives the network explicit stroke-direction information the
+raw-pixel conv path has to learn from scratch with a tiny dataset (~55
+samples/class); the improvement, while modest, is consistent with that
+reasoning and cost nothing at inference time beyond the extra feature
+computation.
+
+**Rollback:** The conv path is untouched — HOG is purely additive. To
+remove it: revert to before commit `1d48362` on `feature/hog-features`
+(or equivalently, on `main`, never merge this branch), which restores
+`FLAT_SIZE = CONV_FLAT_SIZE` (384, no HOG concat) and the old
+`cache["flat"]` naming. `model.json` is not compatible between the two
+(different `w1` width: 584 vs 384 columns) — requires retraining either
+way. Full task-by-task implementation record:
+`docs/superpowers/plans/2026-08-12-hog-feature-augmentation.md`.
+
+**Caveat:** 66.7% is still a long way from strong OCR performance. HOG
+cell size (4px) and bin count (8) were picked as reasonable defaults, not
+tuned — a follow-up hyperparameter sweep on those two (similar to the
+HIDDEN/LR sweep below) is a plausible next lever, as is the
+previously-flagged option of folding visually-identical classes together.
+
+---
+
 ## 2026-08-12 — Add early-stopping checkpointing, tune HIDDEN/LR down after comparing 4 variants
 
 **Decision:** Training the 62-class model with `HIDDEN=80, LR=0.5, EPOCHS=35`
